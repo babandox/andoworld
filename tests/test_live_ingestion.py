@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from datetime import date
 
 from andoworldstate.graph import InMemoryGraph
 from andoworldstate.ingestion.gdelt import GdeltClient, apply_gdelt_threat_to_graph
@@ -110,6 +111,32 @@ def test_gdelt_client_accepts_plain_csv_exports_for_easy_fixture_and_exporter_te
 
     assert len(events) == 1
     assert threat["environmental_threat_lambda"] == 0.55
+
+
+def test_gdelt_client_aggregates_daily_backtest_from_interval_exports():
+    requested_urls: list[str] = []
+
+    def fetch_bytes(url: str) -> bytes:
+        requested_urls.append(url)
+        return zipped_csv(gdelt_row(sql_date="20260517", root_code="17", goldstein="-4.0", country_code="US"))
+
+    client = GdeltClient(fetch_text=lambda url: "unused", fetch_bytes=fetch_bytes, threat_normalization=100.0)
+
+    threat = client.fetch_daily_threat_index(
+        country_code="US",
+        day=date(2026, 5, 17),
+        interval_minutes=720,
+    )
+
+    assert requested_urls == [
+        "http://data.gdeltproject.org/gdeltv2/20260517000000.export.CSV.zip",
+        "http://data.gdeltproject.org/gdeltv2/20260517120000.export.CSV.zip",
+    ]
+    assert threat == {
+        "event_count": 2,
+        "goldstein_salience": 8.0,
+        "environmental_threat_lambda": 0.1,
+    }
 
 
 def zipped_csv(csv_text: str) -> bytes:
