@@ -6,12 +6,14 @@ import re
 import zipfile
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from urllib.request import urlopen
 
 
 DEFAULT_CIVIL_UNREST_ROOT_CODES = frozenset({"14", "17", "18", "19", "20"})
 GDELT_LAST_UPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
+GDELT_V2_ARCHIVE_BASE_URL = "http://data.gdeltproject.org/gdeltv2"
 
 TextFetcher = Callable[[str], str]
 BytesFetcher = Callable[[str], bytes]
@@ -34,12 +36,14 @@ class GdeltClient:
         fetch_text: TextFetcher | None = None,
         fetch_bytes: BytesFetcher | None = None,
         latest_update_url: str = GDELT_LAST_UPDATE_URL,
+        archive_base_url: str = GDELT_V2_ARCHIVE_BASE_URL,
         root_event_codes: Iterable[str] | None = None,
         threat_normalization: float = 100.0,
     ) -> None:
         self._fetch_text = fetch_text or _default_fetch_text
         self._fetch_bytes = fetch_bytes or _default_fetch_bytes
         self._latest_update_url = latest_update_url
+        self._archive_base_url = archive_base_url.rstrip("/")
         self._root_event_codes = frozenset(root_event_codes or DEFAULT_CIVIL_UNREST_ROOT_CODES)
         self._threat_normalization = float(threat_normalization)
 
@@ -49,6 +53,32 @@ class GdeltClient:
         export_bytes = self._fetch_bytes(export_url)
         events = self.parse_events_csv(_decode_export(export_url, export_bytes), country_code=country_code)
         return self.calculate_threat_index(events)
+
+    def fetch_daily_threat_index(
+        self,
+        *,
+        country_code: str,
+        day: date,
+        interval_minutes: int = 15,
+    ) -> dict[str, float | int]:
+        events: list[GdeltEvent] = []
+        for export_url in self.daily_export_urls(day=day, interval_minutes=interval_minutes):
+            export_bytes = self._fetch_bytes(export_url)
+            events.extend(self.parse_events_csv(_decode_export(export_url, export_bytes), country_code=country_code))
+        return self.calculate_threat_index(events)
+
+    def daily_export_urls(self, *, day: date, interval_minutes: int = 15) -> list[str]:
+        if interval_minutes <= 0:
+            raise ValueError("interval_minutes must be positive")
+        minutes_per_day = 24 * 60
+        if minutes_per_day % interval_minutes != 0:
+            raise ValueError("interval_minutes must divide evenly into one day")
+
+        current = datetime.combine(day, time.min)
+        return [
+            f"{self._archive_base_url}/{(current + timedelta(minutes=offset)).strftime('%Y%m%d%H%M%S')}.export.CSV.zip"
+            for offset in range(0, minutes_per_day, interval_minutes)
+        ]
 
     def parse_events_csv(
         self,
