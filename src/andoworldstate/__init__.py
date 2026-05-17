@@ -1,0 +1,2 @@
+"""Geopolitical predictive simulation core."""
+

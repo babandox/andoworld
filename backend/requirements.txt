@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-pytest
-python-dotenv
-wikipedia-api
-psycopg[binary]
