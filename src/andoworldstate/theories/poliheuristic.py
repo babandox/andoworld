@@ -10,22 +10,38 @@ class DecisionOption:
     political: float
     military: float
     economic: float
+    ideological: float = 0.0
+    violates_ideology: bool = False
 
 
 @dataclass
 class PoliheuristicLeader:
     political_survival_threshold: float
     weights: Mapping[str, float] = field(default_factory=lambda: {"military": 0.6, "economic": 0.4})
+    lta_complexity: float = 0.5
+    lta_distrust: float = 0.5
+    fusion_factor: float = 0.0
+    ideological_preservation_threshold: float = 0.0
 
     def evaluate_options(self, options_matrix: list[DecisionOption]) -> str:
         if not options_matrix:
             raise ValueError("options_matrix must not be empty")
 
-        surviving_options = [
-            option for option in options_matrix if option.political >= self.political_survival_threshold
-        ]
-        if not surviving_options:
-            return max(options_matrix, key=lambda option: option.political).option_id
+        if self.fusion_factor > 0.8:
+            surviving_options = [
+                option
+                for option in options_matrix
+                if not option.violates_ideology
+                and option.ideological >= self.ideological_preservation_threshold
+            ]
+            if not surviving_options:
+                return max(options_matrix, key=lambda option: option.ideological).option_id
+        else:
+            surviving_options = [
+                option for option in options_matrix if option.political >= self.political_survival_threshold
+            ]
+            if not surviving_options:
+                return max(options_matrix, key=lambda option: option.political).option_id
 
         best_option = max(surviving_options, key=self._stage_two_utility)
         return best_option.option_id
@@ -38,4 +54,3 @@ class PoliheuristicLeader:
             option.military * self.weights.get("military", 0.0)
             + option.economic * self.weights.get("economic", 0.0)
         )
-
