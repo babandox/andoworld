@@ -8,6 +8,12 @@ from andoworldstate.theories.agent_zero import AgentZero
 from andoworldstate.theories.structural_demographic import MacroState
 
 
+LOW_COMPLEXITY_THRESHOLD = 0.3
+LOW_COMPLEXITY_THRESHOLD_MULTIPLIER = 0.5
+HIGH_DISTRUST_THRESHOLD = 0.7
+THREAT_CUE_TERMS = ("threat", "military", "security", "fear", "crackdown", "violence", "war")
+
+
 @dataclass
 class FastFrugalAgent:
     unique_id: Hashable
@@ -86,12 +92,25 @@ class FFTAgent:
         if not self.cue_hierarchy:
             raise ValueError("cue_hierarchy must contain at least one cue")
 
-    def evaluate_from_state(self, macro_state: MacroState, agent_zero: AgentZero) -> FFTDecision:
+    def evaluate_from_state(
+        self,
+        macro_state: MacroState,
+        agent_zero: AgentZero,
+        *,
+        leader_profile: Any | None = None,
+    ) -> FFTDecision:
         evaluated: list[str] = []
-        last_index = len(self.cue_hierarchy) - 1
-        for index, cue in enumerate(self.cue_hierarchy):
+        cue_hierarchy = _profile_adjusted_cues(self.cue_hierarchy, leader_profile)
+        threshold_multiplier = _profile_threshold_multiplier(leader_profile)
+        last_index = len(cue_hierarchy) - 1
+        for index, cue in enumerate(cue_hierarchy):
             evaluated.append(cue.name)
-            triggered = bool(cue.is_triggered(macro_state, agent_zero))
+            triggered = _cue_is_triggered(
+                cue,
+                macro_state,
+                agent_zero,
+                threshold_multiplier=threshold_multiplier,
+            )
             if index < last_index:
                 if triggered:
                     return FFTDecision(
@@ -107,3 +126,44 @@ class FFTAgent:
                 )
 
         return FFTDecision(choice=0, triggered_cue=None, evaluated_cues=tuple(evaluated))
+
+
+def _profile_threshold_multiplier(leader_profile: Any | None) -> float:
+    if leader_profile is not None and getattr(leader_profile, "lta_complexity", 1.0) < LOW_COMPLEXITY_THRESHOLD:
+        return LOW_COMPLEXITY_THRESHOLD_MULTIPLIER
+    return 1.0
+
+
+def _profile_adjusted_cues(cue_hierarchy: Sequence[Any], leader_profile: Any | None) -> list[Any]:
+    cues = list(cue_hierarchy)
+    if leader_profile is None or getattr(leader_profile, "lta_distrust", 0.0) <= HIGH_DISTRUST_THRESHOLD:
+        return cues
+    threat_cues = [cue for cue in cues if _is_threat_cue(cue)]
+    other_cues = [cue for cue in cues if not _is_threat_cue(cue)]
+    return threat_cues + other_cues
+
+
+def _is_threat_cue(cue: Any) -> bool:
+    cue_name = str(getattr(cue, "name", "")).lower()
+    return any(term in cue_name for term in THREAT_CUE_TERMS)
+
+
+def _cue_is_triggered(
+    cue: Any,
+    macro_state: MacroState,
+    agent_zero: AgentZero,
+    *,
+    threshold_multiplier: float,
+) -> bool:
+    if threshold_multiplier == 1.0 or not all(
+        hasattr(cue, attribute) for attribute in ("extractor", "threshold", "comparison")
+    ):
+        return bool(cue.is_triggered(macro_state, agent_zero))
+
+    value = cue.extractor(macro_state, agent_zero)
+    threshold = cue.threshold * threshold_multiplier
+    if cue.comparison == "greater_equal":
+        return value >= threshold
+    if cue.comparison == "less_equal":
+        return value <= threshold
+    raise ValueError(f"Unsupported FFT cue comparison: {cue.comparison!r}")

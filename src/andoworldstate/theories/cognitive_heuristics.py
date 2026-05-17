@@ -8,6 +8,18 @@ from andoworldstate.theories.poliheuristic import PoliheuristicLeader
 from andoworldstate.theories.structural_demographic import MacroState
 
 
+@dataclass(frozen=True)
+class LeaderProfile:
+    lta_complexity: float = 0.5
+    lta_distrust: float = 0.5
+    fusion_factor: float = 0.0
+
+    def __post_init__(self) -> None:
+        _validate_unit_interval(self.lta_complexity, "lta_complexity")
+        _validate_unit_interval(self.lta_distrust, "lta_distrust")
+        _validate_unit_interval(self.fusion_factor, "fusion_factor")
+
+
 @dataclass
 class CognitiveHeuristicState:
     macro_state: MacroState
@@ -66,3 +78,8 @@ def _cognitive_state(particle: Particle) -> CognitiveHeuristicState:
     if isinstance(particle.state, CognitiveHeuristicState):
         return particle.state
     raise ValueError("particle state must be CognitiveHeuristicState")
+
+
+def _validate_unit_interval(value: float, name: str) -> None:
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be in the closed interval [0, 1]")
