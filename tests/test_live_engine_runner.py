@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from datetime import date
 
+from andoworldstate.smc import Particle, SequentialMonteCarlo
 from run_live_engine import (
     LiveParticleState,
     LiveDayObservation,
     _apply_live_observation_to_swarm,
     build_backtest_dates,
+    export_live_particle_to_neo4j,
     format_day_readout,
     initialize_live_swarm,
+    leader_profile_for_country,
     run_live_engine,
 )
 
@@ -44,6 +47,20 @@ def test_initialize_live_swarm_uses_world_bank_baseline_across_particles():
     assert state.macro_state.debt_to_gdp == 0.714
     assert state.graph.node_properties("capital_city")["role"] == "capital"
     assert state.graph.node_properties("regime")["role"] == "ruling_regime"
+
+
+def test_initialize_live_swarm_injects_country_specific_leader_profiles():
+    irn_state = initialize_live_swarm("IRN", macro_update_fixture(), particle_count=1, seed=3).particles[0].state
+    usa_state = initialize_live_swarm("USA", macro_update_fixture(), particle_count=1, seed=3).particles[0].state
+    fra_state = initialize_live_swarm("FRA", macro_update_fixture(), particle_count=1, seed=3).particles[0].state
+
+    assert leader_profile_for_country("IRN").fusion_factor > 0.85
+    assert irn_state.leader_profile.fusion_factor > 0.85
+    assert usa_state.leader_profile.lta_complexity < 0.3
+    assert usa_state.leader_profile.lta_distrust > 0.7
+    assert fra_state.leader_profile.lta_complexity == 0.5
+    assert fra_state.leader_profile.lta_distrust == 0.5
+    assert fra_state.leader_profile.fusion_factor == 0.3
 
 
 def test_format_day_readout_includes_event_volume_and_mobilization_consensus():
@@ -95,6 +112,34 @@ def test_run_live_engine_queries_real_clients_by_iso3_and_backtests_seven_days()
     assert result.day_summaries[-1].mobilization_consensus > result.day_summaries[0].mobilization_consensus
 
 
+def test_run_live_engine_applies_irn_fused_identity_logic_and_exports_highest_weighted_particle():
+    neo4j_graph = FakeNeo4jGraph()
+
+    result = run_live_engine(
+        "IRN",
+        world_bank_client=FakeWorldBankClient(),
+        gdelt_client=FakeGdeltClient(),
+        neo4j_graph=neo4j_graph,
+        particle_count=20,
+        days=7,
+        end_date=date(2026, 5, 16),
+        emit=False,
+        export_neo4j=True,
+        resample_start=0.5,
+    )
+
+    country_node = neo4j_graph.nodes["IRN"]
+    assert result.neo4j_export.attempted
+    assert result.neo4j_export.succeeded
+    assert result.best_particle_state is not None
+    assert result.best_particle_state.leader_decision == "mutually_destructive_conflict"
+    assert country_node["fusion_factor"] > 0.85
+    assert country_node["leader_decision"] == "mutually_destructive_conflict"
+    assert "relative_wage" in country_node
+    assert neo4j_graph.nodes["province_north"]["complex_behavior_adopted"]
+    assert neo4j_graph.edges[("province_east", "province_north")]["omega"] == 0.2
+
+
 def test_live_observation_does_not_let_watts_cross_weak_bridge_without_centola_width():
     smc = initialize_live_swarm(
         "KEN",
@@ -122,6 +167,32 @@ def test_live_observation_does_not_let_watts_cross_weak_bridge_without_centola_w
     assert not weak_bridge_state.complex_agents["province_west"].behavior_adopted
 
 
+def test_export_live_particle_to_neo4j_serializes_macro_profile_agent_and_network_state():
+    state = initialize_live_swarm("USA", macro_update_fixture(), particle_count=1, seed=3).particles[0].state
+    _apply_live_observation_to_swarm(
+        SequentialMonteCarlo([Particle(state=state, weight=1.0)]),
+        LiveDayObservation(
+            day_number=1,
+            observed_date=date(2026, 5, 10),
+            event_count=20,
+            goldstein_salience=60.0,
+            threat_lambda=1.0,
+        ),
+    )
+    neo4j_graph = FakeNeo4jGraph()
+
+    export_live_particle_to_neo4j(state, neo4j_graph, run_id="test-run")
+
+    assert neo4j_graph.nodes["USA"]["run_id"] == "test-run"
+    assert neo4j_graph.nodes["USA"]["lta_complexity"] < 0.3
+    assert neo4j_graph.nodes["USA"]["debt_to_gdp"] == 0.714
+    assert neo4j_graph.nodes["environment"]["environmental_threat_lambda"] == 1.0
+    assert "affect_v" in neo4j_graph.nodes["province_north"]
+    assert "watts_active_state" in neo4j_graph.nodes["province_north"]
+    assert "complex_behavior_adopted" in neo4j_graph.nodes["province_north"]
+    assert ("capital_city", "province_east") in neo4j_graph.edges
+
+
 class FakeWorldBankClient:
     def __init__(self) -> None:
         self.requested_country_codes: list[str] = []
@@ -144,3 +215,19 @@ class FakeGdeltClient:
             "goldstein_salience": float(event_count * 3),
             "environmental_threat_lambda": min(1.0, event_count / 20.0),
         }
+
+
+class FakeNeo4jGraph:
+    def __init__(self) -> None:
+        self.nodes: dict[str, dict] = {}
+        self.edges: dict[tuple[str, str], dict] = {}
+
+    def add_node(self, node_id, **properties):
+        self.nodes[str(node_id)] = dict(properties)
+
+    def add_edge(self, source, target, **properties):
+        self.edges[(str(source), str(target))] = dict(properties)
+
+
+def macro_update_fixture() -> dict[str, float]:
+    return {"urbanization_rate": 0.31, "youth_bulge": 0.205, "debt_to_gdp": 0.714}

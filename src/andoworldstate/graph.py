@@ -24,10 +24,20 @@ class InMemoryGraph:
         self._require_node(node_id)
         return dict(self._nodes[node_id])
 
+    def node_items(self) -> list[tuple[Hashable, dict[str, Any]]]:
+        return [(node_id, dict(properties)) for node_id, properties in self._nodes.items()]
+
     def add_edge(self, source: Hashable, target: Hashable, **properties: Any) -> None:
         self.add_node(source)
         self.add_node(target)
         self._edges[source][target] = dict(properties)
+
+    def edge_items(self) -> list[tuple[Hashable, Hashable, dict[str, Any]]]:
+        return [
+            (source, target, dict(properties))
+            for source, targets in self._edges.items()
+            for target, properties in targets.items()
+        ]
 
     def neighbors(self, node_id: Hashable) -> list[Hashable]:
         self._require_node(node_id)
@@ -64,4 +74,3 @@ class InMemoryGraph:
         self._require_node(target)
         if target not in self._edges[source]:
             raise ValueError(f"Graph edge does not exist: {source!r} -> {target!r}")
-
